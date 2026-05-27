@@ -1,0 +1,16 @@
+{
+  "name": "chaiaurbackend",
+  "version": "1.0.0",
+  "description": "a project to create a backend for youtube",
+  "keywords": [
+    "javascipt",
+    "backend"
+  ],
+  "license": "ISC",
+  "author": "Hamzah Omair",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}
