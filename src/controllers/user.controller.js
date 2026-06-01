@@ -1,14 +1,15 @@
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
-import { ApiRespone } from "../utils/ApiResponse.js";
+import { ApiResponse } from "../utils/ApiResponse.js";
 import { User } from "../models/user.model.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
+import jwt from "jsonwebtoken";
 
 const generateAccessAndRefreshToken = async (userId) => {
   try {
     const user = await User.findById(userId);
     const accessToken = user.generateAccessToken();
-    const accessToken = user.generateRefreshToken();
+    const refreshToken = user.generateRefreshToken();
 
     user.refreshToken = refreshToken;
     await user.save({ validateBeforeSave: false });
@@ -40,15 +41,8 @@ const registerUser = asyncHandler(async (req, res) => {
   }
 
   const avatarLocalPath = req.files?.avatar[0]?.path;
-  const coverImageLocalPath = req.files?.coverImage[0]?.path;
-
-  if (!avatarLocalPath) {
-    throw new ApiError(400, "Please upload an Avatar");
-  }
-
-  const avatar = await uploadOnCloudinary(avatarLocalPath);
-
   let coverImageLocalPath;
+
   if (
     req.files &&
     Array.isArray(req.files.coverImage) &&
@@ -56,6 +50,13 @@ const registerUser = asyncHandler(async (req, res) => {
   ) {
     coverImageLocalPath = req.files.coverImage[0].path;
   }
+
+  if (!avatarLocalPath) {
+    throw new ApiError(400, "Please upload an Avatar");
+  }
+
+  const avatar = await uploadOnCloudinary(avatarLocalPath);
+  const coverImage = await uploadOnCloudinary(coverImageLocalPath);
 
   if (!avatar) {
     throw new ApiError(400, "Please upload an Avatar");
@@ -80,13 +81,13 @@ const registerUser = asyncHandler(async (req, res) => {
 
   return res
     .status(201)
-    .json(new ApiRespone(200, createdUser, "User Registered Successfully!"));
+    .json(new ApiResponse(200, createdUser, "User Registered Successfully!"));
 });
 
 const loginUser = asyncHandler(async (req, res) => {
   const { email, password, username } = req.body;
 
-  if (!username || !email) {
+  if (!(username || email)) {
     throw new ApiError(400, "Username or Password is required");
   }
 
@@ -108,7 +109,7 @@ const loginUser = asyncHandler(async (req, res) => {
     user._id
   );
 
-  const loggedInUser = User.findById(user._id).select(
+  const loggedInUser = await User.findById(user._id).select(
     "-password -refreshToken"
   );
 
@@ -122,18 +123,19 @@ const loginUser = asyncHandler(async (req, res) => {
     .cookie("accessToken", accessToken, options)
     .cookie("refreshToken", refreshToken, options)
     .json(
-      new ApiRespone(
+      new ApiResponse(
         200,
         {
           user: loggedInUser,
           accessToken,
           refreshToken,
         },
-        "User logged in successfully"
+        "User logged In Successfully"
       )
     );
 });
 
+//maybe doable through cookies
 const logoutUser = asyncHandler(async (req, res) => {
   await User.findByIdAndDelete(
     req.user._id,
@@ -153,33 +155,61 @@ const logoutUser = asyncHandler(async (req, res) => {
   };
 
   return res
-  .status (200)
-  .clearCookie("accessToken", options)
-  .clearCookie("refreshToken", options)
-  .json(new ApiRespone(100, {}, "User logged out successfully"))
+    .status(200)
+    .clearCookie("accessToken", options)
+    .clearCookie("refreshToken", options)
+    .json(new ApiResponse(100, {}, "User logged out successfully"));
 });
 
-export { registerUser, loginUser, logoutUser };
+const refreshAcessToken = asyncHandler(async (req, res) => {
+  const incomingRefreshToken =
+    req.cookies.refreshToken || req.body.refreshToken;
 
-//first get the details of the user through a form in frontend -- done
-//process the details of the user -- done
-// collect username,email,password,fullname, avatar -- done
-// check if the username,email,password are valid min chars, unique,actaully a mail etc -- done
-// check if the user already exists in a database if yes prompt them to log in instead -- done
+  if (!incomingRefreshToken) {
+    throw new ApiError(401, "Unauthorized Request");
+  }
 
-//if user is actually valid and new then begin the registration process
-// check for images and check for avtar if available then upload to cloud -- done
-// create a user object and put them in the database == done
-// check if user is successfully created -- done
-// if user is successfully created then return a response without password and refresh token -- done
+  try {
+    const decodedToken = jwt.verify(
+      incomingRefreshToken,
+      process.env.REFRESH_TOKEN_SECRET
+    );
 
-//login todo list --
+    const user = await User.findById(decodedToken?._id);
 
-//fetch the details given by the user -- req body get email or username -- done
-//validate the details -- no empty fields -- done
-//match the details to the db -- find user if the exist check with req body -- done
-//check if the password is correct -- done
-//if user is logged in provide them with a access token -- done
-//give the user a refresh token and create a copy in db as well -- done
-//check every time access token expires if the user has a refresh token
-//if the user refresh token matches the one in the db then give user another Acc token
+    if (!user) {
+      throw new ApiError(401, "Invalid Refresh Token");
+    }
+
+    if (incomingRefreshToken !== user?.refreshToken) {
+      throw new ApiError(401, "Refresh token is expired or used");
+    }
+
+    const options = {
+      httpOnly: true,
+      secure: true,
+    };
+
+    const { accessToken, newRefreshToken } =
+      await generateAccessAndRefreshToken(user._id);
+
+    return res
+      .status(200)
+      .cookie("accessToken", accessToken, options)
+      .cookie("refreshToken", newRefreshToken, options)
+      .json(
+        new ApiResponse(
+          200,
+          {
+            accessToken,
+            refreshToken: newRefreshToken,
+          },
+          "Access Token Refreshed"
+        )
+      );
+  } catch (error) {
+    throw new ApiError(401, error?.message || "invalid Refresh Token");
+  }
+});
+
+export { registerUser, loginUser, logoutUser, refreshAcessToken };
